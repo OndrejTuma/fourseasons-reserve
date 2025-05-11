@@ -1,0 +1,129 @@
+name: Check Four Seasons Reservations
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # Runs at 9:00 AM UTC every day
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  check-reservations:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Check 4 PM availability
+        id: check-4pm
+        run: |
+          # Get current date
+          CURRENT_DATE=$(date +%Y-%m-%d)
+          MAX_DATE=$(date -d "+2 months" +%Y-%m-%d)
+
+          # Initialize result
+          echo "result=" >> $GITHUB_OUTPUT
+          echo "available_times=" >> $GITHUB_OUTPUT
+
+          # Check each day until we find a match or reach max date
+          while [ "$(date -d "$CURRENT_DATE" +%s)" -le "$(date -d "$MAX_DATE" +%s)" ]; do
+            # Format date for API
+            API_DATE="${CURRENT_DATE}T16:00"
+            
+            # Make API request
+            RESPONSE=$(curl -s "https://www.fourseasons.com/alt/apps/fshr/shared/esb/OT/availability/375117?backward_minutes=150&forward_minutes=150&include_credit_card_results=true&include_experiences=true&include_unavailable=false&party_size=2&require_attributes=default,hightop,bar,counter,outdoor&source=WEB&start_date_time=$API_DATE")
+            
+            # Check if times_available is not null and parse JSON
+            if echo "$RESPONSE" | grep -q '"times_available":null'; then
+              echo "No availability for $CURRENT_DATE at 4 PM"
+            else
+              echo "Found availability for $CURRENT_DATE at 4 PM!"
+              echo "result=$CURRENT_DATE 4PM" >> $GITHUB_OUTPUT
+              
+              # Extract available times and booking URLs
+              TIMES=$(echo "$RESPONSE" | jq -r '.times_available[] | "\(.time) - \(.booking_url)"' | tr '\n' '|')
+              echo "available_times=$TIMES" >> $GITHUB_OUTPUT
+              break
+            fi
+            
+            # Move to next day
+            CURRENT_DATE=$(date -d "$CURRENT_DATE + 1 day" +%Y-%m-%d)
+          done
+
+      - name: Check 9 PM availability
+        id: check-9pm
+        run: |
+          # Get current date
+          CURRENT_DATE=$(date +%Y-%m-%d)
+          MAX_DATE=$(date -d "+2 months" +%Y-%m-%d)
+
+          # Initialize result
+          echo "result=" >> $GITHUB_OUTPUT
+          echo "available_times=" >> $GITHUB_OUTPUT
+
+          # Check each day until we find a match or reach max date
+          while [ "$(date -d "$CURRENT_DATE" +%s)" -le "$(date -d "$MAX_DATE" +%s)" ]; do
+            # Format date for API
+            API_DATE="${CURRENT_DATE}T21:00"
+            
+            # Make API request
+            RESPONSE=$(curl -s "https://www.fourseasons.com/alt/apps/fshr/shared/esb/OT/availability/375117?backward_minutes=150&forward_minutes=150&include_credit_card_results=true&include_experiences=true&include_unavailable=false&party_size=2&require_attributes=default,hightop,bar,counter,outdoor&source=WEB&start_date_time=$API_DATE")
+            
+            # Check if times_available is not null and parse JSON
+            if echo "$RESPONSE" | grep -q '"times_available":null'; then
+              echo "No availability for $CURRENT_DATE at 9 PM"
+            else
+              echo "Found availability for $CURRENT_DATE at 9 PM!"
+              echo "result=$CURRENT_DATE 9PM" >> $GITHUB_OUTPUT
+              
+              # Extract available times and booking URLs
+              TIMES=$(echo "$RESPONSE" | jq -r '.times_available[] | "\(.time) - \(.booking_url)"' | tr '\n' '|')
+              echo "available_times=$TIMES" >> $GITHUB_OUTPUT
+              break
+            fi
+            
+            # Move to next day
+            CURRENT_DATE=$(date -d "$CURRENT_DATE + 1 day" +%Y-%m-%d)
+          done
+
+      - name: Create Issue if Availability Found
+        if: steps.check-4pm.outputs.result != '' || steps.check-9pm.outputs.result != ''
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const results = [];
+            if (context.job === 'check-reservations') {
+              if (steps.check-4pm.outputs.result) {
+                results.push(steps.check-4pm.outputs.result);
+              }
+              if (steps.check-9pm.outputs.result) {
+                results.push(steps.check-9pm.outputs.result);
+              }
+              
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '🎉 Four Seasons Reservation Available!',
+                body: `Found available reservation slots:\n\n${results.map(r => `- ${r}`).join('\n')}\n\nCheck the [reservation page](https://www.fourseasons.com/) to book your spot!`
+              });
+            }
+
+      - name: Send Email Notification
+        if: steps.check-4pm.outputs.result != '' || steps.check-9pm.outputs.result != ''
+        uses: dawidd6/action-send-mail@v5
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: 'Four Seasons Reservation Available!'
+          body: |
+            Found available reservation slots:
+
+            ${{ steps.check-4pm.outputs.result }}
+            ${{ steps.check-4pm.outputs.available_times }}
+
+            ${{ steps.check-9pm.outputs.result }}
+            ${{ steps.check-9pm.outputs.available_times }}
+
+            Click the links above to book your spot!
+          to: ${{ vars.NOTIFICATION_EMAIL }}
+          from: GitHub Actions
