@@ -1,7 +1,6 @@
 'use client';
 
-import { useState } from 'react';
-import axios from 'axios';
+import { useState, useEffect } from 'react';
 
 const daysOfWeek = [
   { value: 0, label: 'Sunday' },
@@ -18,6 +17,7 @@ export default function Home() {
   const [time, setTime] = useState('19:00');
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [currentCheck, setCurrentCheck] = useState<{ date: string; time: string } | null>(null);
 
   const handleDayChange = (day: number) => {
     setSelectedDays(prev => 
@@ -31,21 +31,57 @@ export default function Home() {
     e.preventDefault();
     setLoading(true);
     setResult(null);
+    setCurrentCheck(null);
 
-    try {
-      const response = await axios.get('/api/check-availability', {
-        params: {
-          days: selectedDays.join(','),
-          time
-        }
+    const eventSource = new EventSource(
+      `/api/check-availability?days=${selectedDays.join(',')}&time=${time}`
+    );
+
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      
+      switch (data.type) {
+        case 'progress':
+          setCurrentCheck({
+            date: data.date,
+            time: data.time
+          });
+          break;
+        case 'success':
+          setResult({
+            success: true,
+            date: data.date,
+            time: data.time,
+            data: data.data
+          });
+          eventSource.close();
+          setLoading(false);
+          break;
+        case 'error':
+          setResult({
+            error: data.message
+          });
+          eventSource.close();
+          setLoading(false);
+          break;
+        case 'no_availability':
+          setResult({
+            success: false,
+            message: data.message
+          });
+          eventSource.close();
+          setLoading(false);
+          break;
+      }
+    };
+
+    eventSource.onerror = () => {
+      setResult({
+        error: 'Connection error occurred'
       });
-      setResult(response.data);
-    } catch (error) {
-      console.error('Error:', error);
-      setResult({ error: 'Failed to check availability' });
-    } finally {
+      eventSource.close();
       setLoading(false);
-    }
+    };
   };
 
   return (
@@ -89,6 +125,14 @@ export default function Home() {
             {loading ? 'Searching...' : 'Find Reservation'}
           </button>
         </form>
+
+        {currentCheck && (
+          <div className="mt-4 p-4 bg-blue-50 rounded">
+            <p className="text-blue-600">
+              Checking availability for {currentCheck.date} at {currentCheck.time}...
+            </p>
+          </div>
+        )}
 
         {result && (
           <div className="mt-6 p-4 border rounded">
